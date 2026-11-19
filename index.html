@@ -8,7 +8,12 @@
     body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
     textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
     button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
+    pre { white-space: pre-wrap; margin: .25rem 0 0; font: inherit; padding: .5rem; border: 1px solid #8888; }
+    #notice { margin: 1rem 0 0; }
+    #notice.warning { padding: .5rem; border-left: 4px solid #b45309; background: #f59e0b22; }
+    #ready { margin-top: 1rem; }
+    #ready h2 { margin: 0; font-size: 1rem; }
+    #ready p { margin: 0 0 .75rem; }
   </style>
 </head>
 <body>
@@ -18,18 +23,71 @@
     <textarea id="message" rows="4"></textarea>
     <button type="submit">Разобрать заявку</button>
   </form>
-  <pre id="result" aria-live="polite"></pre>
+  <p id="notice" role="status" aria-live="polite" hidden></p>
+  <div id="ready" hidden>
+    <h2>Тема</h2>
+    <p id="topic"></p>
+    <h2>Черновик ответа</h2>
+    <pre id="draft"></pre>
+    <p><small>Это черновик от ИИ. Прочитайте его и отправьте клиенту сами.</small></p>
+  </div>
   <script type="module">
     const form = document.querySelector("form");
-    const result = document.querySelector("#result");
+    const message = document.querySelector("#message");
+    const button = form.querySelector("button");
+    const notice = document.querySelector("#notice");
+    const ready = document.querySelector("#ready");
+    const topicEl = document.querySelector("#topic");
+    const draftEl = document.querySelector("#draft");
+
+    const TOPIC_LABELS = { delivery: "Доставка", pricing: "Цена", other: "Другое" };
+
+    // Каждый вызов сначала полностью очищает прошлый результат,
+    // поэтому старый черновик не остаётся рядом с новым сообщением.
+    function render({ notice: noticeText = "", warning = false, topic = "", draft = "" } = {}) {
+      notice.textContent = noticeText;
+      notice.hidden = noticeText === "";
+      notice.classList.toggle("warning", warning);
+      topicEl.textContent = topic;
+      draftEl.textContent = draft;
+      ready.hidden = draft === "";
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
-      });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
+      if (message.value.trim() === "") {
+        render({ notice: "Введите текст заявки.", warning: true });
+        return;
+      }
+      button.disabled = true;
+      render({ notice: "Разбираю заявку…" });
+      try {
+        const reply = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: message.value }),
+        });
+        const data = await reply.json();
+        if (reply.ok && data.status === "ready" && typeof data.draft === "string" && data.draft.trim() !== "") {
+          render({ topic: TOPIC_LABELS[data.topic] ?? "Другое", draft: data.draft });
+        } else if (reply.ok && data.status === "manual_review") {
+          render({
+            notice: "Автоматически разобрать заявку не получилось. Прочитайте её и ответьте клиенту вручную.",
+            warning: true,
+          });
+        } else if (reply.status === 400) {
+          render({ notice: "Введите текст заявки.", warning: true });
+        } else {
+          throw new Error(`Unexpected response: ${reply.status}`);
+        }
+      } catch {
+        render({
+          notice: "Не удалось получить ответ от сервера. Попробуйте ещё раз или ответьте клиенту вручную.",
+          warning: true,
+        });
+      } finally {
+        button.disabled = false;
+      }
     });
   </script>
 </body>
